@@ -1,0 +1,38 @@
+{
+  "name": "prometheus-monitoring-dashboard",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "perf:smoke": "k6 run ../docs/k6-ramp-scenarios.js -e PROFILE=smoke -e MODE=normal",
+    "perf:ramp": "k6 run ../docs/k6-ramp-scenarios.js -e PROFILE=ramp -e MODE=normal",
+    "perf:mixed": "k6 run ../docs/k6-ramp-scenarios.js -e PROFILE=ramp -e MODE=mixed",
+    "perf:error": "k6 run ../docs/k6-ramp-scenarios.js -e PROFILE=ramp -e MODE=error -e ERROR_PATH=${ERROR_PATH:-/api/blocks/9999999999999999}",
+    "perf:latency": "k6 run ../docs/k6-ramp-scenarios.js -e PROFILE=ramp -e MODE=latency -e LATENCY_PATH=${LATENCY_PATH:-/api/blocks?dashboardId=2&progress=NOT_STARTED}"
+  },
+  "dependencies": {
+    "next": "14.1.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "lucide-react": "^0.344.0",
+    "recharts": "^2.12.2",
+    "clsx": "^2.1.0",
+    "tailwind-merge": "^2.2.1",
+    "js-cookie": "^3.0.5"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.3",
+    "@types/node": "^20.11.19",
+    "@types/react": "^18.2.55",
+    "@types/react-dom": "^18.2.19",
+    "@types/js-cookie": "^3.0.6",
+    "postcss": "^8.4.35",
+    "tailwindcss": "^3.4.1",
+    "autoprefixer": "^10.4.17",
+    "eslint": "^8.56.0",
+    "eslint-config-next": "14.1.0"
+  }
+}
