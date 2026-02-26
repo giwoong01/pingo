@@ -46,13 +46,22 @@ Prometheus 기반 운영 모니터링/알림 서비스로, 인프라 사양과 �
 
 ## 핵심 기능
 
-- Prometheus 지표 수집 및 대시보드 시각화
-- Rule 기반 상태 전이 알림 (NORMAL -> WARNING/CRITICAL)
-- Discord Webhook 전송 (View 링크 포함)
-- 앱/인스턴스(노드) 분리 모니터링
-- Blue/Green 운영 맥락을 고려한 대상 라벨 구성
-- AI 기반 원인 후보/대응안 제안 (옵션)
-- 폴백 분석 로직으로 AI 장애 시에도 결정론적 응답 제공
+- Prometheus 지표 기반 실시간 모니터링
+  - 앱(JVM/HTTP) 및 인스턴스(node-exporter) 메트릭 수집/조회
+  - 대시보드/상세 페이지 시각화 및 시계열 드릴다운
+- 운영 리소스 등록/관리
+  - Clusters, Apps, Instances, Rules, Webhooks UI 제공
+  - 앱/인스턴스별 위젯 레이아웃 저장
+- Rule 기반 알림 엔진
+  - 상태 전이 중심 알림 및 쿨다운 적용
+  - 룰 활성/비활성, 스코프(App/Instance), 프리셋/고급식(PromQL) 지원
+- Discord Webhook 알림
+  - 선택 웹훅 라우팅, runbook 링크 포함 메시지 전송
+- 앱 헬스/알림 이벤트 추적
+  - 앱 상태(OK/DEGRADED/DOWN/UNKNOWN) 및 이벤트 이력 조회
+- AI Advisor (옵션)
+  - 원인 후보/대응안 제안
+  - AI 실패 시 폴백 분석으로 일관된 응답 유지
 
 ## Pingo 강점
 
