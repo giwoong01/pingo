@@ -31,7 +31,6 @@ Prometheus 기반 운영 모니터링/알림 서비스로, 인프라 사양과 �
 - [인스턴스 메모리 모니터링 (node-exporter)](#인스턴스-메모리-모니터링-node-exporter)
 - [선택 사항: 로컬 AI (Ollama)](#선택-사항-로컬-ai-ollama)
 - [AI 보조 개발](#ai-보조-개발)
-- [알려진 제한 사항](#알려진-제한-사항)
 - [라이선스](#라이선스)
 
 ## 왜 Pingo인가
@@ -74,10 +73,40 @@ Prometheus 기반 운영 모니터링/알림 서비스로, 인프라 사양과 �
 
 ```text
 .
-├── backend/        # NestJS API
-├── frontend/       # Next.js dashboard
+├── backend/                          # NestJS API
+│   ├── src/
+│   │   ├── auth/                     # 인증/워크스페이스
+│   │   ├── monitoring/               # 모니터링 수집/분석 API
+│   │   ├── ops/                      # 클러스터/앱/인스턴스/룰/웹훅
+│   │   ├── database/                 # TypeORM 설정/마이그레이션
+│   │   ├── app.module.ts
+│   │   └── main.ts
+│   ├── scripts/                      # DB 백업/복구 스크립트
+│   ├── Dockerfile
+│   └── package.json
+├── frontend/                         # Next.js 14 대시보드
+│   ├── src/
+│   │   ├── pages/
+│   │   │   ├── dashboard.tsx
+│   │   │   ├── ops/                  # 운영 화면(클러스터/앱/인스턴스/룰/알림)
+│   │   │   └── auth/                 # 로그인/회원가입/초대수락
+│   │   ├── features/
+│   │   │   ├── monitoring/           # 모니터링 API/컴포넌트/타입
+│   │   │   ├── ops/                  # Ops API 클라이언트
+│   │   │   └── auth/                 # Auth API 클라이언트
+│   │   ├── layouts/
+│   │   ├── styles/
+│   │   └── utils/
+│   ├── public/
+│   ├── Dockerfile
+│   └── package.json
+├── docs/
+│   └── screenshots/                  # README 이미지 자산
+├── tools/
+│   └── aegisctl.mjs                  # 운영 보조 스크립트
 ├── docker-compose.yml
-└── .env.example
+├── .env.example
+└── README.md
 ```
 
 ## 아키텍처
@@ -250,13 +279,6 @@ docker compose up -d --force-recreate backend
 - 사용 목적: 코드 초안/리팩터링, 문서화, 점검 자동화
 - 원칙: 최종 설계/검증/의사결정은 사람이 수행
 - 안전: 비밀정보(토큰, webhook URL, 내부 민감정보)는 AI 입력에 포함하지 않음
-
-## 알려진 제한 사항
-
-- 현재 테스트 코드(`*.spec.ts`)가 충분히 갖춰져 있지 않아, 회귀 검증은 수동 점검 비중이 큼
-- Alert/AI 분석 품질은 Prometheus 라벨 일관성과 메트릭 수집 상태에 크게 의존함
-- 단일 PostgreSQL/단일 Prometheus 기준으로 설계되어 대규모 멀티테넌트 운영에는 추가 확장이 필요함
-- Discord Webhook 기반 알림 채널 중심으로 구성되어, 다채널(Slack/Email/PagerDuty) 통합은 별도 구현이 필요함
 
 ## 라이선스
 
