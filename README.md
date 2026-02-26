@@ -106,11 +106,17 @@ flowchart LR
 
 ## 스크린샷
 
-아래 경로에 이미지를 추가하면 GitHub README에서 바로 렌더링됩니다.
+### Dashboard
 
-- `docs/screenshots/dashboard-overview.png`
-- `docs/screenshots/alert-rule-timeline.png`
-- `docs/screenshots/incident-detail.png`
+![Dashboard](docs/screenshots/dashboard.png)
+
+### Apps Detail
+
+![Apps Detail](docs/screenshots/apps-detail.png)
+
+### Rules
+
+![Rules](docs/screenshots/rules.png)
 
 ## 빠른 시작 (Docker)
 

@@ -3,6 +3,10 @@
 AGENTS.md
 TODO.md
 docs/
+!docs/
+docs/*
+!docs/screenshots/
+!docs/screenshots/*
 
 # Node / build artifacts
 node_modules/
