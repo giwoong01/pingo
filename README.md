@@ -118,6 +118,10 @@ flowchart LR
 
 ![Rules](docs/screenshots/rules.png)
 
+### Discord Webhook Message
+
+![Discord Webhook Message](docs/screenshots/discord-webhook-message.png)
+
 ## 빠른 시작 (Docker)
 
 1. 환경변수 파일 생성
