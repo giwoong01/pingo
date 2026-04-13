@@ -119,16 +119,15 @@ export class AiService {
       .join(', ');
 
     const system =
-      '온콜 SRE 어시스턴트입니다. 한국어 JSON 객체만 출력하세요. ' +
-      '키는 title, summary, probable_causes, next_checks, mitigations, confidence만 사용하세요. ' +
-      'probable_causes/next_checks/mitigations는 문자열 배열(각 1~3개)로만 출력하세요. ' +
-      '입력 JSON을 그대로 복사하지 마세요.';
+      '당신은 SRE 분석 봇입니다. 반드시 JSON만 출력하세요. 절대로 설명, 마크다운, 코드블록을 추가하지 마세요.\n' +
+      '출력 예시(형식만 참고, 내용은 실제 알림을 분석해서 작성):\n' +
+      '{"title":"HTTP 지연 급증","summary":"p95 지연이 임계치를 초과했습니다.","probable_causes":["트래픽 급증으로 인한 처리 지연","DB 쿼리 슬로우"],"next_checks":["최근 5분 RPS 추이 확인","슬로우 쿼리 로그 확인"],"mitigations":["스케일 아웃 고려","캐시 레이어 점검"],"confidence":0.7}';
     const user =
-      `app=${appName} job=${job}\n` +
-      `rule=${ruleName} kind=${kind} severity=${severity}\n` +
-      `primary_value=${primaryValue}\n` +
-      `primary_expr=${primaryExpr}\n` +
-      `evidence=${evidenceLines}`;
+      `서비스: ${appName} (job=${job})\n` +
+      `알림규칙: ${ruleName} (kind=${kind}, severity=${severity})\n` +
+      `측정값: ${primaryValue}\n` +
+      (primaryExpr ? `쿼리: ${primaryExpr}\n` : '') +
+      (evidenceLines ? `지표: ${evidenceLines}` : '');
     return { system, user };
   }
 
@@ -152,6 +151,9 @@ export class AiService {
             `${baseUrl.replace(/\/$/, '')}/api/chat`,
             {
               stream: false,
+              model,
+              format: 'json',
+              think: false,
               messages: [
                 { role: 'system', content: system },
                 { role: 'user', content: user },
@@ -161,31 +163,48 @@ export class AiService {
             { timeout: timeoutMs },
           ),
         );
-        const content = resp.data?.message?.content;
-        const parsed = this.parseJson(content);
+        const payload = resp.data;
+        const content = payload?.message?.content;
+        const thinking = payload?.message?.thinking;
+        const primaryText = typeof content === 'string' && content.trim().length > 0 ? content : thinking;
+        const parsed = this.parseJson(primaryText);
         if (parsed && typeof parsed === 'object') {
           this.resetProviderFailure('ollama');
+          if (this.coercedReportHasEcho(parsed)) {
+            this.logger.warn('Ollama returned valid JSON but arrays contain prompt echo; using context-derived report.');
+            return { raw: this.contextDerivedReport(context) };
+          }
           return { raw: parsed };
         }
-        const coerced = this.coerceTextReport(content);
-        if (coerced) {
-          this.resetProviderFailure('ollama');
-          this.logger.warn('Ollama returned non-JSON content; coerced text response into structured report.');
-          return { raw: coerced };
-        }
-        if (typeof content === 'string' && (this.looksLikePromptEcho(content) || this.looksLikePromptEchoFragment(content))) {
+        if (typeof primaryText === 'string' && (this.looksLikePromptEcho(primaryText) || this.looksLikePromptEchoFragment(primaryText))) {
           this.resetProviderFailure('ollama');
           this.logger.warn('Ollama response looked like prompt echo/fragment; using context-derived structured report.');
           return { raw: this.contextDerivedReport(context) };
         }
-        if (typeof content === 'string' && content.trim().length > 0) {
+        const coerced = this.coerceTextReport(primaryText);
+        if (coerced) {
+          this.resetProviderFailure('ollama');
+          if (this.coercedReportHasEcho(coerced)) {
+            this.logger.warn(`Ollama coerced report has echo content; sample="${String(primaryText || '').slice(0, 120).replace(/\s+/g, ' ')}"; using context-derived report.`);
+            return { raw: this.contextDerivedReport(context) };
+          }
+          this.logger.warn('Ollama returned non-JSON content; coerced text response into structured report.');
+          return { raw: coerced };
+        }
+        if (typeof primaryText === 'string' && primaryText.trim().length > 0) {
           this.resetProviderFailure('ollama');
           this.logger.warn('Ollama returned malformed JSON text; using context-derived structured report.');
+          return { raw: this.contextDerivedReport(context) };
+        }
+        if ((payload?.done_reason === 'length' || payload?.done_reason === 'max_tokens') && typeof content === 'string' && content.length === 0) {
+          this.resetProviderFailure('ollama');
+          this.logger.warn('Ollama response was truncated before content emission; using context-derived structured report.');
           return { raw: this.contextDerivedReport(context) };
         }
         lastFailureReason = 'provider_invalid_json';
         const sample = typeof content === 'string' ? content.slice(0, 220).replace(/\s+/g, ' ') : String(content);
         this.logger.warn(`Ollama returned non-object JSON content. sample="${sample}"`);
+        this.logger.warn(`Ollama payload summary: ${JSON.stringify(this.summarizeOllamaPayload(payload))}`);
         lastErrMsg = 'invalid JSON response';
         this.recordProviderFailure('ollama', lastFailureReason);
       } catch (e: any) {
@@ -201,6 +220,29 @@ export class AiService {
     return { raw: null, failureReason: lastFailureReason || 'provider_request_failed' };
   }
 
+  private summarizeOllamaPayload(payload: any): Record<string, any> {
+    const message = payload?.message;
+    const content = message?.content;
+    const toolCalls = Array.isArray(message?.tool_calls) ? message.tool_calls : [];
+    return {
+      model: payload?.model ?? null,
+      done: payload?.done ?? null,
+      done_reason: payload?.done_reason ?? null,
+      created_at: payload?.created_at ?? null,
+      message_role: message?.role ?? null,
+      message_keys: message && typeof message === 'object' ? Object.keys(message) : [],
+      content_type: typeof content,
+      content_length: typeof content === 'string' ? content.length : null,
+      tool_call_count: toolCalls.length,
+      tool_call_types: toolCalls.map((t: any) => t?.type).filter((t: any) => typeof t === 'string').slice(0, 5),
+      eval_count: payload?.eval_count ?? null,
+      prompt_eval_count: payload?.prompt_eval_count ?? null,
+      total_duration: payload?.total_duration ?? null,
+      load_duration: payload?.load_duration ?? null,
+      eval_duration: payload?.eval_duration ?? null,
+    };
+  }
+
   private async analyzeWithOpenAi(context: any): Promise<{ raw: any | null; failureReason?: string }> {
     const apiKey = this.config.get<string>('OPENAI_API_KEY', '');
     if (!apiKey) return { raw: null, failureReason: 'provider_missing_api_key' };
@@ -212,6 +254,7 @@ export class AiService {
         this.http.post(
           'https://api.openai.com/v1/chat/completions',
           {
+            model,
             response_format: { type: 'json_object' },
             messages: [
               { role: 'system', content: system },
@@ -287,6 +330,27 @@ export class AiService {
       if (!s) return '';
       return s.length > max ? s.slice(0, max - 1) + '…' : s;
     };
+    const isPromptMetaText = (s: string) => {
+      const t = String(s || '').trim();
+      if (!t) return true;
+      return (
+        /^thinking process\s*:?/i.test(t) ||
+        /^analyze the request\s*:?/i.test(t) ||
+        /^role\s*:?/i.test(t) ||
+        /^output format\s*:?/i.test(t) ||
+        /^keys?\s*:?/i.test(t) ||
+        /^constraints?\s*:?/i.test(t) ||
+        /^values?\s*:?/i.test(t) ||
+        /^assistant\s*:?/i.test(t) ||
+        /^json object/i.test(t) ||
+        /^korean json object/i.test(t) ||
+        /온콜\s*sre\s*어시스턴트/i.test(t) ||
+        /probable causes?/i.test(t) ||
+        /next checks?/i.test(t) ||
+        /^mitigations?\s*:?\s*$/i.test(t) ||
+        /^<[^>]+>$/.test(t)
+      );
+    };
     const sanitizeEvidenceIds = (v: any, maxItems = 3): string[] => {
       if (!Array.isArray(v)) return [];
       const out: string[] = [];
@@ -321,6 +385,7 @@ export class AiService {
         }
 
         if (!text) continue;
+        if (isPromptMetaText(text)) continue;
         const key = text.toLowerCase();
         if (seen.has(key)) continue;
         seen.add(key);
@@ -667,7 +732,31 @@ export class AiService {
 
     return {
       title: 'AI 분석 결과',
+      summary,
+      probable_causes,
+      next_checks,
+      mitigations,
     };
+  }
+
+  private coercedReportHasEcho(coerced: Record<string, any>): boolean {
+    const echoPatterns = [
+      /^analyze the request/i,
+      /^output format/i,
+      /^keys?\s*:/i,
+      /^constraints?\s*:/i,
+      /^values?\s*:/i,
+      /^thinking process/i,
+      /probable causes?/i,
+      /next checks?/i,
+      /문자열 배열/i,
+      /한국어 json 객체/i,
+      /온콜.*sre/i,
+      /^<[^>]+>$/,
+    ];
+    const hasEcho = (arr: any): boolean =>
+      Array.isArray(arr) && arr.some((item) => typeof item === 'string' && echoPatterns.some((re) => re.test(item)));
+    return hasEcho(coerced.probable_causes) || hasEcho(coerced.next_checks) || hasEcho(coerced.mitigations);
   }
 
   private looksLikePromptEcho(text: string): boolean {

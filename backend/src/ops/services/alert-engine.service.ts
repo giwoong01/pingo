@@ -454,18 +454,24 @@ export class AlertEngineService implements OnModuleInit, OnModuleDestroy {
       },
       firedAt: new Date().toISOString(),
       firingSince: firingSince.toISOString(),
+      snapshot,
     };
-    let aiReport: any | null = null;
-    try {
-      aiReport = await this.ai.analyzeAlert(aiContext);
-    } catch (e: any) {
-      this.logger.warn(`AI analysis failed. ruleId=${rule.id} err=${e?.message || e}`);
-    }
-    if (aiReport && event) {
+    const aiProvider = (this.config.get<string>('AI_PROVIDER', 'none') || 'none').toLowerCase();
+    const aiEnabled = aiProvider !== 'none';
+    const pendingAiReport = aiEnabled
+      ? {
+          summary: 'AI 분석 중...',
+          quality: {
+            source: 'fallback',
+            reasons: ['analysis_pending'],
+          },
+        }
+      : null;
+    if (event && pendingAiReport) {
       try {
-        await this.eventRepo.update({ id: event.id }, { aiReport });
+        await this.eventRepo.update({ id: event.id }, { aiReport: pendingAiReport as any } as any);
       } catch (e: any) {
-        this.logger.warn(`Failed to persist aiReport. ruleId=${rule.id} err=${e?.message || e}`);
+        this.logger.warn(`Failed to persist pending aiReport. ruleId=${rule.id} err=${e?.message || e}`);
       }
     }
 
@@ -505,7 +511,7 @@ export class AlertEngineService implements OnModuleInit, OnModuleDestroy {
       return;
     }
     const msg = this.discord.buildAlertMessage({
-      title: aiReport?.title || `${app?.name || scopedInstance?.name || 'Instance'}: ${rule.name}`,
+      title: `${app?.name || scopedInstance?.name || 'Instance'}: ${rule.name}`,
       severity: rule.severity,
       appName: app?.name || scopedInstance?.name || 'Instance',
       job: app?.job || scopedInstance?.prometheusInstance || '-',
@@ -515,7 +521,7 @@ export class AlertEngineService implements OnModuleInit, OnModuleDestroy {
       kind: rule.kind,
       expr: snapshot?.primary?.expr,
       firingSince: firingSince.toISOString(),
-      ai: aiReport,
+      ai: null,
       runbookUrl: String((rule.runbook as any)?.url || ''),
       runbookSteps: Array.isArray((rule.runbook as any)?.steps) ? (rule.runbook as any).steps : [],
     });
@@ -533,6 +539,110 @@ export class AlertEngineService implements OnModuleInit, OnModuleDestroy {
     if (st) {
       if (sentAny) st.lastSentAt = new Date();
       await this.stateRepo.save(st);
+    }
+
+    if (event && aiEnabled) {
+      // Do not block notification path on LLM latency.
+      void this.enrichEventWithAiReport(
+        event.id,
+        rule.id,
+        aiContext,
+        {
+          webhooks,
+          appName: app?.name || scopedInstance?.name || 'Instance',
+          job: app?.job || scopedInstance?.prometheusInstance || '-',
+          appId: app?.id || undefined,
+          ruleName: rule.name,
+          ruleId: rule.id,
+          kind: rule.kind,
+          expr: snapshot?.primary?.expr,
+          firingSince: firingSince.toISOString(),
+          severity: rule.severity,
+          runbookUrl: String((rule.runbook as any)?.url || ''),
+          runbookSteps: Array.isArray((rule.runbook as any)?.steps) ? (rule.runbook as any).steps : [],
+        },
+      );
+    }
+  }
+
+  private async enrichEventWithAiReport(
+    eventId: string,
+    ruleId: string,
+    aiContext: any,
+    notifyContext?: {
+      webhooks: Webhook[];
+      appName: string;
+      job: string;
+      appId?: string;
+      ruleName: string;
+      ruleId: string;
+      kind: Rule['kind'];
+      expr?: string;
+      firingSince: string;
+      severity: Rule['severity'];
+      runbookUrl?: string;
+      runbookSteps?: string[];
+    },
+  ): Promise<void> {
+    try {
+      const aiReport = await this.ai.analyzeAlert(aiContext);
+      if (!aiReport) {
+        await this.eventRepo.update(
+          { id: eventId },
+          {
+            aiReport: {
+              summary: 'AI 분석 결과를 생성하지 못했습니다. 룰/메트릭 정보를 먼저 확인해 주세요.',
+              quality: { source: 'fallback', reasons: ['analysis_unavailable'] },
+            } as any,
+          } as any,
+        );
+        return;
+      }
+      await this.eventRepo.update({ id: eventId }, { aiReport: aiReport as any } as any);
+      if (
+        notifyContext &&
+        (Array.isArray(aiReport?.probable_causes) ||
+          Array.isArray(aiReport?.next_checks) ||
+          Array.isArray(aiReport?.mitigations))
+      ) {
+        const aiMsg = this.discord.buildAlertMessage({
+          title: `[AI] ${notifyContext.appName}: ${notifyContext.ruleName}`,
+          severity: notifyContext.severity,
+          appName: notifyContext.appName,
+          job: notifyContext.job,
+          appId: notifyContext.appId,
+          ruleName: notifyContext.ruleName,
+          ruleId: notifyContext.ruleId,
+          kind: notifyContext.kind,
+          expr: notifyContext.expr,
+          firingSince: notifyContext.firingSince,
+          ai: aiReport,
+          runbookUrl: notifyContext.runbookUrl || '',
+          runbookSteps: notifyContext.runbookSteps || [],
+        });
+        for (const w of notifyContext.webhooks) {
+          try {
+            await this.discord.sendWebhook(w.discordUrl, aiMsg);
+          } catch (sendErr: any) {
+            this.logger.warn(`Discord AI follow-up failed. webhook=${w.name} err=${sendErr?.message || sendErr}`);
+          }
+        }
+      }
+    } catch (e: any) {
+      this.logger.warn(`AI analysis failed asynchronously. ruleId=${ruleId} err=${e?.message || e}`);
+      try {
+        await this.eventRepo.update(
+          { id: eventId },
+          {
+            aiReport: {
+              summary: 'AI 분석이 지연되거나 실패했습니다. 룰/메트릭 정보를 먼저 확인해 주세요.',
+              quality: { source: 'fallback', reasons: ['analysis_failed'] },
+            } as any,
+          } as any,
+        );
+      } catch (updateErr: any) {
+        this.logger.warn(`Failed to persist async aiReport fallback. ruleId=${ruleId} err=${updateErr?.message || updateErr}`);
+      }
     }
   }
 
